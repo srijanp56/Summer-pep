@@ -1,0 +1,16 @@
+# Node / Frontend
+node_modules/
+dist/
+.DS_Store
+
+# Python / Backend
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+droneroute.db
+*.sqlite3
+
+# Vercel
+.vercel/
