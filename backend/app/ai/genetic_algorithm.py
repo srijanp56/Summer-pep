@@ -16,6 +16,7 @@ from app.ai.physics import (
     calculate_segment_physics,
     line_segment_intersects_polygon,
     get_terrain_elevation,
+    calculate_bearing_deg,
     DRONE_MODELS,
     DEFAULT_NO_FLY_ZONES,
 )
