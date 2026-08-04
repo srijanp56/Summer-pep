@@ -75,7 +75,14 @@ function AppInner() {
   }, []);
 
   const handleRunOptimization = useCallback(async (formData: any) => {
-    if (!start || !destination) { setError('Please select both origin and destination.'); return; }
+    let activeStart = start;
+    let activeDest = destination;
+    if (!activeStart || !activeDest) {
+      activeStart = activeStart || { lat: 37.7749, lng: -122.4194 };
+      activeDest = activeDest || { lat: 37.7833, lng: -122.4067 };
+      setStart(activeStart);
+      setDestination(activeDest);
+    }
 
     lastFormDataRef.current = formData;
 
@@ -91,7 +98,7 @@ function AppInner() {
     setActivePanel('ga');
     setMobileTab('map');
 
-    const reqPayload = { ...formData, start, destination };
+    const reqPayload = { ...formData, start: activeStart, destination: activeDest };
 
     let wsSucceeded = false;
 
