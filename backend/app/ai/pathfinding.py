@@ -221,7 +221,7 @@ class SpatialGridSolver:
             weather_risk_score=round(avg_weather_risk, 3),
             safety_risk_score=round(safety_risk, 3),
             success_probability=success_prob,
-            total_cost_usd=round(total_dist_km * 0.50 + 2.8, 2),
+            total_cost_inr=round(total_dist_km * 15.0 + 50.0, 2),
             carbon_saved_kg=round(total_dist_km * 0.18, 2),
             execution_time_ms=round(execution_time_ms, 2),
         )

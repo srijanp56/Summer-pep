@@ -27,6 +27,7 @@ export interface OptimizationRequest {
   drone_model: string;
   initial_battery_pct: number;
   priority: string;
+  package_type?: string;
   weather_mode: string;
   simulated_weather?: WeatherConditions;
   emergency_medical: boolean;
@@ -39,6 +40,8 @@ export interface GenerationMetric {
   min_fitness: number;
   best_distance_km: number;
   best_battery_drain_pct: number;
+  mutation_rate: number;
+  diversity_score: number;
 }
 
 export interface RouteResult {
@@ -51,21 +54,30 @@ export interface RouteResult {
   weather_risk_score: number;
   safety_risk_score: number;
   success_probability: number;
-  total_cost_usd: number;
+  total_cost_inr: number;
   carbon_saved_kg: number;
   execution_time_ms: number;
+
 }
 
 export interface OptimizationResponse {
   request_id: string;
-  ga_route: RouteResult;
-  astar_route: RouteResult;
-  dijkstra_route: RouteResult;
+  ga_route: RouteResult;             // Optimal (Best)
+  balanced_route?: RouteResult;       // Balanced (Alternative)
+  direct_route?: RouteResult;         // Direct / High-Risk (Baseline)
   generation_history: GenerationMetric[];
   winner_algorithm: string;
   ai_explanation: string;
   weather: WeatherConditions;
+  battery_sufficient: boolean;
+  battery_required_pct: number;
+  battery_available_pct: number;
+  // GA insight fields
+  fitness_improvement_pct: number;
+  generations_to_converge: number;
+  route_selection_reasons: string[];
 }
+
 
 export interface TelemetryEvent {
   timestamp_s: number;
@@ -102,3 +114,30 @@ export interface RAGQueryResponse {
   citations: Citation[];
   confidence: number;
 }
+
+export interface MissionSummary {
+  id: string;
+  created_at: string;
+  start_lat: number;
+  start_lng: number;
+  dest_lat: number;
+  dest_lng: number;
+  payload_weight_kg: number;
+  drone_model: string;
+  winner_algorithm: string;
+  ga_distance_km: number;
+  ga_battery_used_pct: number;
+  ga_flight_time_min: number;
+}
+
+export interface MissionListResponse {
+  missions: MissionSummary[];
+  total: number;
+}
+
+// WebSocket message types from the streaming GA endpoint
+export type WSMessage =
+  | { type: 'generation'; data: GenerationMetric }
+  | { type: 'result'; data: OptimizationResponse }
+  | { type: 'error'; error?: string; message: string; battery_required_pct?: number; battery_available_pct?: number; deficit_pct?: number };
+

@@ -42,12 +42,16 @@ def export_mission_report(data: OptimizationResponse, format: str = "json"):
                 "Weather Risk",
                 "Safety Risk",
                 "Success Probability",
-                "Total Cost ($)",
+                "Total Cost (₹)",
                 "Exec Time (ms)",
             ]
         )
 
-        for route in [data.ga_route, data.astar_route, data.dijkstra_route]:
+        routes_to_export = [data.ga_route]
+        if data.balanced_route: routes_to_export.append(data.balanced_route)
+        if data.direct_route: routes_to_export.append(data.direct_route)
+
+        for route in routes_to_export:
             writer.writerow(
                 [
                     route.algorithm,
@@ -58,7 +62,7 @@ def export_mission_report(data: OptimizationResponse, format: str = "json"):
                     route.weather_risk_score,
                     route.safety_risk_score,
                     route.success_probability,
-                    route.total_cost_usd,
+                    route.total_cost_inr,
                     route.execution_time_ms,
                 ]
             )
@@ -78,6 +82,24 @@ def export_mission_report(data: OptimizationResponse, format: str = "json"):
 
     elif format == "html" or format == "pdf":
         # Professional HTML report ready for printing/saving as PDF
+        rows_html = f"""
+        <tr>
+          <td><strong>🟢 Optimal GA Route</strong></td><td>{data.ga_route.total_distance_km}</td><td>{data.ga_route.estimated_flight_time_min}</td><td>{data.ga_route.battery_consumed_pct}%</td><td>₹{data.ga_route.total_cost_inr}</td><td>{data.ga_route.execution_time_ms} ms</td>
+        </tr>
+        """
+        if data.balanced_route:
+            rows_html += f"""
+            <tr>
+              <td>🟡 Balanced Alternative</td><td>{data.balanced_route.total_distance_km}</td><td>{data.balanced_route.estimated_flight_time_min}</td><td>{data.balanced_route.battery_consumed_pct}%</td><td>₹{data.balanced_route.total_cost_inr}</td><td>{data.balanced_route.execution_time_ms} ms</td>
+            </tr>
+            """
+        if data.direct_route:
+            rows_html += f"""
+            <tr>
+              <td>🔴 Direct / High-Risk</td><td>{data.direct_route.total_distance_km}</td><td>{data.direct_route.estimated_flight_time_min}</td><td>{data.direct_route.battery_consumed_pct}%</td><td>₹{data.direct_route.total_cost_inr}</td><td>{data.direct_route.execution_time_ms} ms</td>
+            </tr>
+            """
+
         html_doc = f"""
         <!DOCTYPE html>
         <html>
@@ -103,22 +125,15 @@ def export_mission_report(data: OptimizationResponse, format: str = "json"):
           </div>
 
           <div class="card">
-            <h2>Algorithm Optimization Comparison</h2>
+            <h2>Genetic Algorithm Route Comparison</h2>
             <table>
               <tr>
-                <th>Algorithm</th><th>Distance (km)</th><th>Time (min)</th><th>Battery Drain (%)</th><th>Cost ($)</th><th>Exec Time (ms)</th>
+                <th>Route Tier</th><th>Distance (km)</th><th>Time (min)</th><th>Battery Drain (%)</th><th>Cost (₹)</th><th>Exec Time (ms)</th>
               </tr>
-              <tr>
-                <td><strong>GA (Scratch)</strong></td><td>{data.ga_route.total_distance_km}</td><td>{data.ga_route.estimated_flight_time_min}</td><td>{data.ga_route.battery_consumed_pct}%</td><td>${data.ga_route.total_cost_usd}</td><td>{data.ga_route.execution_time_ms} ms</td>
-              </tr>
-              <tr>
-                <td>A* Search</td><td>{data.astar_route.total_distance_km}</td><td>{data.astar_route.estimated_flight_time_min}</td><td>{data.astar_route.battery_consumed_pct}%</td><td>${data.astar_route.total_cost_usd}</td><td>{data.astar_route.execution_time_ms} ms</td>
-              </tr>
-              <tr>
-                <td>Dijkstra</td><td>{data.dijkstra_route.total_distance_km}</td><td>{data.dijkstra_route.estimated_flight_time_min}</td><td>{data.dijkstra_route.battery_consumed_pct}%</td><td>${data.dijkstra_route.total_cost_usd}</td><td>{data.dijkstra_route.execution_time_ms} ms</td>
-              </tr>
+              {rows_html}
             </table>
           </div>
+
 
           <div class="card">
             <h2>AI Selection Rationale</h2>

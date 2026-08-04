@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Shield, AlertTriangle, Activity, Zap, Radio, Satellite, Thermometer } from 'lucide-react';
-import { Waypoint, AttackSimulationResponse } from '../types';
+import { Shield, AlertTriangle, Activity, Zap, Radio, Satellite, Thermometer, Terminal } from 'lucide-react';
+import { Waypoint, AttackSimulationResponse, TelemetryEvent } from '../types';
 import { simulateCyberAttack } from '../services/api';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from 'recharts';
 
@@ -16,6 +16,18 @@ const ATTACKS = [
   { id: 'signal_jamming', label: 'Signal Jamming', icon: <Radio className="w-4 h-4" />, color: '#06b6d4', desc: 'RF C2 link RSSI jammed below safe operational threshold.' },
 ];
 
+function statusColor(status: string): string {
+  if (status === 'ATTACK_DETECTED') return '#f43f5e';
+  return '#10b981';
+}
+
+function gpsDelta(ev: TelemetryEvent): number {
+  return Math.sqrt(
+    Math.pow((ev.gps_lat - ev.inertial_lat) * 111000, 2) +
+    Math.pow((ev.gps_lng - ev.inertial_lng) * 111000, 2)
+  );
+}
+
 export default function CyberSecurityPanel({ route }: CyberSecurityPanelProps) {
   const [selectedAttack, setSelectedAttack] = useState<string>('gps_spoofing');
   const [severity, setSeverity] = useState(0.8);
@@ -23,10 +35,18 @@ export default function CyberSecurityPanel({ route }: CyberSecurityPanelProps) {
   const [isSimulating, setIsSimulating] = useState(false);
   const [showAlert, setShowAlert] = useState(false);
 
+  const [siemLog, setSiemLog] = useState<TelemetryEvent[]>([]);
+  const [isReplaying, setIsReplaying] = useState(false);
+  const siemRef = useRef<HTMLDivElement>(null);
+  const replayRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
   const handleSimulate = async () => {
     setIsSimulating(true);
     setResult(null);
     setShowAlert(false);
+    setSiemLog([]);
+    setIsReplaying(false);
+    if (replayRef.current) clearInterval(replayRef.current);
 
     const dummyRoute = route.length > 0 ? route : [
       { lat: 37.7749, lng: -122.4194, alt: 50 },
@@ -38,6 +58,8 @@ export default function CyberSecurityPanel({ route }: CyberSecurityPanelProps) {
       const res = await simulateCyberAttack(selectedAttack, severity, dummyRoute);
       setResult(res);
       setShowAlert(res.detected);
+      // Start SIEM replay
+      startSiemReplay(res.telemetry_logs);
     } catch {
       setResult({
         attack_type: selectedAttack,
@@ -53,12 +75,35 @@ export default function CyberSecurityPanel({ route }: CyberSecurityPanelProps) {
     }
   };
 
+  const startSiemReplay = (logs: TelemetryEvent[]) => {
+    if (!logs.length) return;
+    setIsReplaying(true);
+    let idx = 0;
+    replayRef.current = setInterval(() => {
+      if (idx >= logs.length) {
+        clearInterval(replayRef.current!);
+        setIsReplaying(false);
+        return;
+      }
+      setSiemLog(prev => [...prev, logs[idx]]);
+      idx++;
+    }, 400); // ~400ms per telemetry tick = realistic SIEM feel
+  };
+
+  // Auto-scroll SIEM console to bottom
+  useEffect(() => {
+    if (siemRef.current) {
+      siemRef.current.scrollTop = siemRef.current.scrollHeight;
+    }
+  }, [siemLog]);
+
+  // Cleanup on unmount
+  useEffect(() => () => { if (replayRef.current) clearInterval(replayRef.current); }, []);
+
   const attackInfo = ATTACKS.find(a => a.id === selectedAttack);
 
   const chartData = result?.telemetry_logs.map(t => ({
     time: `${t.timestamp_s}s`,
-    GPS_Lat: t.gps_lat,
-    INS_Lat: t.inertial_lat,
     Signal: (t.signal_strength_dbm + 120) * 0.8,
     Battery: t.battery_pct,
     Anomaly: t.anomaly_detected ? 20 : 0,
@@ -153,6 +198,79 @@ export default function CyberSecurityPanel({ route }: CyberSecurityPanelProps) {
         )}
       </AnimatePresence>
 
+      {/* SIEM Animated Console */}
+      <AnimatePresence>
+        {siemLog.length > 0 && (
+          <motion.div
+            initial={{ opacity: 0, y: 10 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 10 }}
+            className="glass-panel rounded-xl overflow-hidden"
+          >
+            {/* Console header */}
+            <div
+              className="flex items-center gap-2 px-3 py-2"
+              style={{ borderBottom: '1px solid rgba(255,255,255,0.06)', background: 'rgba(0,0,0,0.3)' }}
+            >
+              <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+              <span className="text-[10px] font-mono text-emerald-400 font-bold">SIEM TELEMETRY CONSOLE</span>
+              {isReplaying && (
+                <span className="ml-auto flex items-center gap-1 text-[9px] text-emerald-400">
+                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  LIVE
+                </span>
+              )}
+            </div>
+            {/* Scrolling log */}
+            <div
+              ref={siemRef}
+              className="p-2 space-y-0.5 font-mono text-[9px] overflow-y-auto"
+              style={{ maxHeight: '160px', background: 'rgba(0,0,0,0.5)' }}
+            >
+              {siemLog.map((ev, i) => {
+                const delta = gpsDelta(ev);
+                const isAnomaly = ev.anomaly_detected;
+                return (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, x: -8 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.2 }}
+                    className="flex items-center gap-2 px-1 py-0.5 rounded"
+                    style={{
+                      background: isAnomaly ? 'rgba(244,63,94,0.08)' : 'transparent',
+                      borderLeft: isAnomaly ? '2px solid rgba(244,63,94,0.5)' : '2px solid transparent',
+                    }}
+                  >
+                    <span className="text-slate-600 flex-shrink-0">{ev.timestamp_s.toFixed(1)}s</span>
+                    <span
+                      className="font-bold flex-shrink-0"
+                      style={{ color: statusColor(ev.status) }}
+                    >
+                      [{ev.status}]
+                    </span>
+                    <span className="text-slate-400">
+                      GPS±{delta.toFixed(1)}m
+                    </span>
+                    <span className="text-slate-500">
+                      SIG:{ev.signal_strength_dbm.toFixed(0)}dBm
+                    </span>
+                    <span className="text-amber-400">
+                      BAT:{ev.battery_pct.toFixed(0)}%
+                    </span>
+                  </motion.div>
+                );
+              })}
+              {isReplaying && (
+                <div className="flex items-center gap-1 px-1 text-emerald-400">
+                  <span className="animate-pulse">▌</span>
+                </div>
+              )}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Telemetry Chart */}
       {result && chartData && chartData.length > 0 && (
         <motion.div
@@ -161,7 +279,7 @@ export default function CyberSecurityPanel({ route }: CyberSecurityPanelProps) {
           className="glass-panel rounded-xl p-4"
         >
           <p className="text-[10px] text-slate-500 uppercase tracking-wider font-medium mb-3">Telemetry During Attack</p>
-          <ResponsiveContainer width="100%" height={160}>
+          <ResponsiveContainer width="100%" height={140}>
             <LineChart data={chartData} margin={{ top: 5, right: 5, left: -25, bottom: 5 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" />
               <XAxis dataKey="time" tick={{ fill: '#64748b', fontSize: 8 }} axisLine={{ stroke: '#334155' }} tickLine={false} />

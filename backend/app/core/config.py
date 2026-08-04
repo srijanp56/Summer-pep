@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     ELITISM_PCT: float = 0.10
     TOURNAMENT_SIZE: int = 5
     MUTATION_RATE: float = 0.15
+    # Set via OPENWEATHER_API_KEY env var for live weather. Falls back to simulated if empty.
+    OPENWEATHER_API_KEY: str = os.getenv("OPENWEATHER_API_KEY", "")
 
     class Config:
         case_sensitive = True

@@ -1,7 +1,7 @@
 import random
 import time
 import math
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional, Callable
 from app.models.domain import (
     Coordinates,
     Waypoint,
@@ -51,6 +51,7 @@ class GeneticAlgorithmSolver:
         mutation_rate: float = 0.20,
         intermediate_waypoints_count: int = 4,
         priority: str = "balanced",
+        package_type: str = "standard",
     ):
         self.start = start
         self.destination = destination
@@ -61,11 +62,20 @@ class GeneticAlgorithmSolver:
         self.population_size = population_size
         self.max_generations = max_generations
         self.elitism_count = max(1, int(population_size * elitism_pct))
-        self.mutation_rate = mutation_rate
+        self.base_mutation_rate = mutation_rate
+        self.current_mutation_rate = mutation_rate
         self.num_intermediate = intermediate_waypoints_count
         self.priority = priority
+        self.package_type = package_type
 
         self.direct_dist_km = haversine_distance_km(start, destination)
+
+        # Adaptive mutation tracking
+        self._stagnation_count = 0
+        self._stagnation_threshold = 5      # gens without improvement before boosting
+        self._mutation_boost_factor = 2.5   # peak = base * boost
+        self._mutation_cooldown = 3         # gens to cool down after boost
+        self._boost_active = 0              # cooldown counter
 
     def _generate_random_waypoint(self, ratio: float) -> Waypoint:
         """Generate a random intermediate waypoint along the journey vector with orthogonal noise."""
@@ -114,15 +124,26 @@ class GeneticAlgorithmSolver:
         wps = chromosome.waypoints
         n_segments = len(wps) - 1
 
+        turn_penalty = 0.0
         for i in range(n_segments):
             p1 = Coordinates(lat=wps[i].lat, lng=wps[i].lng, alt=wps[i].alt)
             p2 = Coordinates(lat=wps[i+1].lat, lng=wps[i+1].lng, alt=wps[i+1].alt)
 
-            seg_phys = calculate_segment_physics(p1, p2, self.specs, self.payload_kg, self.weather)
+            seg_phys = calculate_segment_physics(p1, p2, self.specs, self.payload_kg, self.weather, self.package_type)
             total_dist_km += seg_phys["distance_km"]
             total_time_min += seg_phys["time_min"]
             total_energy_wh += seg_phys["energy_wh"]
             weather_risk_sum += seg_phys["risk"]
+
+            # Anti-spillage turn angle penalty for hot food
+            if i < n_segments - 1 and self.package_type == "hot_food":
+                p3 = Coordinates(lat=wps[i+2].lat, lng=wps[i+2].lng, alt=wps[i+2].alt)
+                b1 = calculate_bearing_deg(p1, p2)
+                b2 = calculate_bearing_deg(p2, p3)
+                diff = abs(b2 - b1)
+                if diff > 180: diff = 360 - diff
+                if diff > 35.0:
+                    turn_penalty += (diff - 35.0) * 0.4
 
             # No-fly zone intersection check
             for zone in self.no_fly_zones:
@@ -168,8 +189,8 @@ class GeneticAlgorithmSolver:
             + w_pay * f_payload
         ) * 100.0
 
-        # Subtractions for hard safety violations
-        final_fitness = max(0.001, base_fitness - no_fly_penalties - terrain_penalty)
+        # Subtractions for hard safety & anti-spillage violations
+        final_fitness = max(0.001, base_fitness - no_fly_penalties - terrain_penalty - turn_penalty)
 
         chromosome.fitness = final_fitness
         chromosome.metrics = {
@@ -182,6 +203,51 @@ class GeneticAlgorithmSolver:
             "no_fly_penalties": no_fly_penalties,
         }
         return final_fitness
+
+    def _compute_diversity(self, population: List[Chromosome]) -> float:
+        """Measure population diversity as avg pairwise waypoint distance (normalized)."""
+        if len(population) < 2:
+            return 1.0
+        sample = population[:min(20, len(population))]
+        total_var = 0.0
+        count = 0
+        for c in sample:
+            for wp in c.waypoints[1:-1]:  # intermediate only
+                total_var += abs(wp.lat - self.start.lat) + abs(wp.lng - self.start.lng)
+                count += 1
+        return min(1.0, total_var / max(1, count) * 100.0)
+
+    def _adapt_mutation_rate(self, prev_best: float, curr_best: float) -> None:
+        """
+        Adaptive mutation: boost rate when population stagnates, cool down after boost.
+        Stagnation detected when fitness improvement < 0.05 for _stagnation_threshold gens.
+        """
+        delta = curr_best - prev_best
+        if delta < 0.05:
+            self._stagnation_count += 1
+        else:
+            self._stagnation_count = 0
+            self._boost_active = 0
+
+        if self._stagnation_count >= self._stagnation_threshold:
+            # Boost mutation rate to escape local optimum
+            self.current_mutation_rate = min(
+                0.50,
+                self.base_mutation_rate * self._mutation_boost_factor
+            )
+            self._boost_active = self._mutation_cooldown
+            self._stagnation_count = 0  # reset after boosting
+        elif self._boost_active > 0:
+            # Cool down: linearly reduce back to base rate
+            self._boost_active -= 1
+            cooldown_pct = self._boost_active / self._mutation_cooldown
+            self.current_mutation_rate = (
+                self.base_mutation_rate
+                + (self.base_mutation_rate * self._mutation_boost_factor - self.base_mutation_rate) * cooldown_pct
+            )
+        else:
+            # Steady state: clamp near base rate with slight exploration noise
+            self.current_mutation_rate = self.base_mutation_rate
 
     def tournament_selection(self, population: List[Chromosome], k: int = 5) -> Chromosome:
         selected = random.sample(population, k)
@@ -214,13 +280,15 @@ class GeneticAlgorithmSolver:
         return Chromosome(child1_wps), Chromosome(child2_wps)
 
     def mutate(self, chromosome: Chromosome) -> None:
-        """Random waypoint mutation: offsets intermediate waypoints."""
+        """Random waypoint mutation: offsets intermediate waypoints using current adaptive rate."""
         for i in range(1, len(chromosome.waypoints) - 1):
-            if random.random() < self.mutation_rate:
+            if random.random() < self.current_mutation_rate:
                 wp = chromosome.waypoints[i]
-                lat_noise = random.gauss(0, 0.003)
-                lng_noise = random.gauss(0, 0.003)
-                alt_noise = random.gauss(0, 5.0)
+                # Scale noise proportional to current mutation intensity
+                noise_scale = 0.003 * (self.current_mutation_rate / self.base_mutation_rate)
+                lat_noise = random.gauss(0, noise_scale)
+                lng_noise = random.gauss(0, noise_scale)
+                alt_noise = random.gauss(0, 5.0 * (self.current_mutation_rate / self.base_mutation_rate))
 
                 new_lat = wp.lat + lat_noise
                 new_lng = wp.lng + lng_noise
@@ -231,7 +299,46 @@ class GeneticAlgorithmSolver:
                     lat=new_lat, lng=new_lng, alt=new_alt, terrain=terrain
                 )
 
-    def solve(self) -> Tuple[RouteResult, List[GenerationMetric], float]:
+    def _create_route_result(self, chromosome: Chromosome, algo_name: str, exec_time_ms: float) -> RouteResult:
+        m = chromosome.metrics
+        battery_pct = m.get("battery_drain_pct", 15.0)
+        safety_risk = m.get("safety_risk", 0.0)
+        success_prob = round(
+            max(0.05, min(0.99, (1.0 - (battery_pct / 100.0)) * (1.0 - min(1.0, safety_risk)))), 2
+        )
+        return RouteResult(
+            algorithm=algo_name,
+            waypoints=chromosome.waypoints,
+            total_distance_km=m.get("distance_km", 0.0),
+            estimated_flight_time_min=m.get("time_min", 0.0),
+            battery_consumed_pct=battery_pct,
+            energy_wh=m.get("energy_wh", 0.0),
+            weather_risk_score=m.get("weather_risk", 0.0),
+            safety_risk_score=safety_risk,
+            success_probability=success_prob,
+            total_cost_inr=round(m.get("distance_km", 0.0) * 15.0 + 50.0, 2),
+            carbon_saved_kg=round(m.get("distance_km", 0.0) * 0.18, 2),
+            execution_time_ms=round(exec_time_ms, 2),
+        )
+
+    def _create_direct_route(self, exec_time_ms: float) -> RouteResult:
+        """Construct straight-line (naive/direct) path between start & destination."""
+        start_wp = Waypoint(lat=self.start.lat, lng=self.start.lng, alt=self.start.alt)
+        dest_wp = Waypoint(lat=self.destination.lat, lng=self.destination.lng, alt=self.destination.alt)
+        chromosome = Chromosome([start_wp, dest_wp])
+        self.evaluate_fitness(chromosome)
+        return self._create_route_result(chromosome, "Direct Route", exec_time_ms)
+
+    def solve(
+        self,
+        on_generation: Optional[Callable[[GenerationMetric], None]] = None,
+    ) -> Tuple[RouteResult, RouteResult, RouteResult, List[GenerationMetric], float]:
+        """
+        Run the Genetic Algorithm.
+        
+        Returns:
+            (optimal_route, balanced_route, direct_route, generation_history, execution_time_ms)
+        """
         start_time = time.time()
         population = self.initialize_population()
         for c in population:
@@ -239,6 +346,7 @@ class GeneticAlgorithmSolver:
 
         generation_history: List[GenerationMetric] = []
         best_overall = max(population, key=lambda c: c.fitness).copy()
+        prev_best_fitness = best_overall.fitness
 
         for gen in range(1, self.max_generations + 1):
             population.sort(key=lambda c: c.fitness, reverse=True)
@@ -247,20 +355,30 @@ class GeneticAlgorithmSolver:
             best_curr = population[0]
             avg_fit = sum(c.fitness for c in population) / self.population_size
             min_fit = population[-1].fitness
+            diversity = self._compute_diversity(population)
 
             if best_curr.fitness > best_overall.fitness:
                 best_overall = best_curr.copy()
 
-            generation_history.append(
-                GenerationMetric(
-                    generation=gen,
-                    best_fitness=round(best_curr.fitness, 2),
-                    avg_fitness=round(avg_fit, 2),
-                    min_fitness=round(min_fit, 2),
-                    best_distance_km=best_curr.metrics.get("distance_km", 0.0),
-                    best_battery_drain_pct=best_curr.metrics.get("battery_drain_pct", 0.0),
-                )
+            # Adapt mutation rate based on stagnation
+            self._adapt_mutation_rate(prev_best_fitness, best_curr.fitness)
+            prev_best_fitness = best_curr.fitness
+
+            metric = GenerationMetric(
+                generation=gen,
+                best_fitness=round(best_curr.fitness, 2),
+                avg_fitness=round(avg_fit, 2),
+                min_fitness=round(min_fit, 2),
+                best_distance_km=best_curr.metrics.get("distance_km", 0.0),
+                best_battery_drain_pct=best_curr.metrics.get("battery_drain_pct", 0.0),
+                mutation_rate=round(self.current_mutation_rate, 4),
+                diversity_score=round(diversity, 4),
             )
+            generation_history.append(metric)
+
+            # Stream generation update via callback (WebSocket)
+            if on_generation:
+                on_generation(metric)
 
             # Elitism: retain top 10%
             next_generation = [c.copy() for c in population[: self.elitism_count]]
@@ -281,29 +399,18 @@ class GeneticAlgorithmSolver:
             population = next_generation
 
         execution_time_ms = (time.time() - start_time) * 1000.0
+        population.sort(key=lambda c: c.fitness, reverse=True)
 
-        # Construct RouteResult for GA winner
-        m = best_overall.metrics
-        battery_pct = m.get("battery_drain_pct", 15.0)
-        safety_risk = m.get("safety_risk", 0.0)
+        # 1. Optimal Route (Best GA Winner)
+        optimal_route = self._create_route_result(best_overall, "Optimal GA Route", execution_time_ms)
 
-        success_prob = round(
-            max(0.05, min(0.99, (1.0 - (battery_pct / 100.0)) * (1.0 - safety_risk))), 2
-        )
+        # 2. Balanced Route (Alternative top-tier solution with secondary tradeoff)
+        # Select chromosome from ~15th percentile that is structurally distinct
+        balanced_chrom = population[min(5, len(population) - 1)]
+        balanced_route = self._create_route_result(balanced_chrom, "Balanced Alternative", execution_time_ms)
 
-        route_result = RouteResult(
-            algorithm="Genetic Algorithm",
-            waypoints=best_overall.waypoints,
-            total_distance_km=m.get("distance_km", 0.0),
-            estimated_flight_time_min=m.get("time_min", 0.0),
-            battery_consumed_pct=battery_pct,
-            energy_wh=m.get("energy_wh", 0.0),
-            weather_risk_score=m.get("weather_risk", 0.0),
-            safety_risk_score=safety_risk,
-            success_probability=success_prob,
-            total_cost_usd=round(m.get("distance_km", 0.0) * 0.45 + 2.5, 2),
-            carbon_saved_kg=round(m.get("distance_km", 0.0) * 0.18, 2),
-            execution_time_ms=round(execution_time_ms, 2),
-        )
+        # 3. Direct Route (Naive straight-line baseline, high-risk if intersecting no-fly zone)
+        direct_route = self._create_direct_route(execution_time_ms)
 
-        return route_result, generation_history, execution_time_ms
+        return optimal_route, balanced_route, direct_route, generation_history, execution_time_ms
+

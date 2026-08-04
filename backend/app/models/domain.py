@@ -51,9 +51,11 @@ class OptimizationRequest(BaseModel):
     drone_model: str = Field(default="DJI FlyCart 30")
     initial_battery_pct: float = Field(default=100.0, ge=10.0, le=100.0)
     priority: str = Field(default="balanced", description="balanced, speed, battery, safety")
+    package_type: str = Field(default="standard", description="standard, hot_food, cold_item, medicine")
     weather_mode: str = Field(default="simulated", description="simulated or live")
     simulated_weather: Optional[WeatherConditions] = None
     emergency_medical: bool = False
+
 
 
 class GenerationMetric(BaseModel):
@@ -63,6 +65,8 @@ class GenerationMetric(BaseModel):
     min_fitness: float
     best_distance_km: float
     best_battery_drain_pct: float
+    mutation_rate: float = 0.20
+    diversity_score: float = 0.0
 
 
 class RouteResult(BaseModel):
@@ -75,20 +79,28 @@ class RouteResult(BaseModel):
     weather_risk_score: float
     safety_risk_score: float
     success_probability: float
-    total_cost_usd: float
+    total_cost_inr: float
     carbon_saved_kg: float
     execution_time_ms: float
 
 
+
 class OptimizationResponse(BaseModel):
     request_id: str
-    ga_route: RouteResult
-    astar_route: RouteResult
-    dijkstra_route: RouteResult
+    ga_route: RouteResult                       # Optimal (Best)
+    balanced_route: Optional[RouteResult] = None  # Balanced (Alternative)
+    direct_route: Optional[RouteResult] = None    # Direct / High-Risk (Baseline)
     generation_history: List[GenerationMetric]
     winner_algorithm: str
     ai_explanation: str
     weather: WeatherConditions
+    battery_sufficient: bool = True
+    battery_required_pct: float = 0.0
+    battery_available_pct: float = 100.0
+    # GA insight fields
+    fitness_improvement_pct: float = 0.0      # % improvement gen1 → final
+    generations_to_converge: int = 0           # gen where fitness plateaued
+    route_selection_reasons: List[str] = []    # human-readable waypoint decisions
 
 
 class AttackSimulationRequest(BaseModel):
@@ -136,3 +148,23 @@ class RAGQueryResponse(BaseModel):
     answer: str
     citations: List[Citation]
     confidence: float
+
+
+class MissionSummary(BaseModel):
+    id: str
+    created_at: str
+    start_lat: float
+    start_lng: float
+    dest_lat: float
+    dest_lng: float
+    payload_weight_kg: float
+    drone_model: str
+    winner_algorithm: str
+    ga_distance_km: float
+    ga_battery_used_pct: float
+    ga_flight_time_min: float
+
+
+class MissionListResponse(BaseModel):
+    missions: List[MissionSummary]
+    total: int

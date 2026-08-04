@@ -180,6 +180,7 @@ def calculate_segment_physics(
     specs: DroneSpecs,
     payload_kg: float,
     weather: WeatherConditions,
+    package_type: str = "standard",
 ) -> Dict[str, float]:
     """
     Calculates detailed physical properties for flight between p1 and p2:
@@ -205,9 +206,10 @@ def calculate_segment_physics(
     headwind_component = weather.wind_speed_m_s * math.cos(rel_angle)  # positive = headwind
     crosswind_component = weather.wind_speed_m_s * math.sin(rel_angle)
 
-    # Base cruise speed adjusted for payload and safety
-    base_speed = specs.max_speed_m_s * max(0.6, 1.0 - 0.25 * (payload_kg / specs.max_payload_kg))
-    effective_ground_speed = max(5.0, base_speed - headwind_component)  # m/s
+    # Base cruise speed adjusted for payload, safety, and package type
+    speed_mult = 1.2 if package_type == "cold_item" else (0.85 if package_type == "hot_food" else 1.0)
+    base_speed = specs.max_speed_m_s * speed_mult * max(0.6, 1.0 - 0.25 * (payload_kg / specs.max_payload_kg))
+    effective_ground_speed = max(5.0, base_speed - headwind_component)
 
     flight_time_s = dist_m / effective_ground_speed
     flight_time_min = flight_time_s / 60.0

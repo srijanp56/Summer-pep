@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Search, X, MapPin, Navigation, Loader2 } from 'lucide-react';
+
 import { Coordinates, OptimizationResponse } from '../types';
+import { useTheme } from '../ThemeContext';
+import { audioTelemetry } from '../services/audioTelemetry';
 
 // Fix Leaflet default icon
 delete (L.Icon.Default.prototype as any)._getIconUrl;
@@ -19,15 +21,14 @@ interface MapViewProps {
   onMapClick: (coords: Coordinates) => void;
   clickMode: 'start' | 'destination' | null;
   onLocationSelect?: (coords: Coordinates, type: 'start' | 'destination') => void;
+  selectedRouteType?: 'optimal' | 'balanced' | 'direct';
+  onSelectRouteType?: (type: 'optimal' | 'balanced' | 'direct') => void;
+  onInjectHazard?: () => void;
+  activeWaypointIdx?: number | null;
 }
 
-interface SearchResult {
-  display_name: string;
-  lat: string;
-  lon: string;
-  type: string;
-  importance: number;
-}
+
+
 
 const NO_FLY_ZONES = [
   {
@@ -106,7 +107,7 @@ function createDroneIcon(battery: number): L.DivIcon {
           font-size:22px;
           box-shadow:0 0 25px rgba(6,182,212,0.6),0 0 50px rgba(6,182,212,0.2);
           animation:drone-hover 2.5s ease-in-out infinite;
-        ">🛸</div>
+        "><img src="/drone.png" alt="drone" style="width:28px;height:28px;object-fit:contain;filter:drop-shadow(0 0 6px rgba(6,182,212,0.9)) drop-shadow(0 0 12px rgba(6,182,212,0.4));" /></div>
         <div style="
           background:rgba(3,7,18,0.95);
           color:${bColor};font-size:8px;font-weight:700;
@@ -129,115 +130,36 @@ function createDroneIcon(battery: number): L.DivIcon {
   });
 }
 
-// Geocoding search component using Nominatim
-function MapSearchBar({ onSelect, placeholder, type, icon }: {
-  onSelect: (coords: Coordinates, name: string) => void;
-  placeholder: string;
-  type: 'start' | 'destination';
-  icon: React.ReactNode;
-}) {
-  const [query, setQuery] = useState('');
-  const [results, setResults] = useState<SearchResult[]>([]);
-  const [isSearching, setIsSearching] = useState(false);
-  const [isOpen, setIsOpen] = useState(false);
-  const debounceRef = useRef<ReturnType<typeof setTimeout>>();
-
-  const search = useCallback(async (q: string) => {
-    if (q.length < 3) { setResults([]); setIsOpen(false); return; }
-    setIsSearching(true);
-    try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(q)}&limit=6&addressdetails=1`,
-        { headers: { 'Accept-Language': 'en', 'User-Agent': 'DroneRouteAI/1.0' } }
-      );
-      const data: SearchResult[] = await res.json();
-      setResults(data);
-      setIsOpen(data.length > 0);
-    } catch { setResults([]); }
-    finally { setIsSearching(false); }
-  }, []);
-
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const v = e.target.value;
-    setQuery(v);
-    clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => search(v), 400);
-  };
-
-  const handleSelect = (r: SearchResult) => {
-    const coords = { lat: parseFloat(r.lat), lng: parseFloat(r.lon) };
-    const shortName = r.display_name.split(',').slice(0, 2).join(',');
-    setQuery(shortName);
-    setIsOpen(false);
-    onSelect(coords, r.display_name);
-  };
-
-  const color = type === 'start' ? '#10b981' : '#06b6d4';
-
-  return (
-    <div className="relative">
-      <div
-        className="flex items-center gap-2 rounded-xl px-3 py-2.5 input-dark"
-        style={{ border: `1px solid ${isOpen ? color + '44' : 'rgba(255,255,255,0.08)'}` }}
-      >
-        <div style={{ color }} className="flex-shrink-0">{icon}</div>
-        <input
-          type="text"
-          value={query}
-          onChange={handleChange}
-          onFocus={() => results.length > 0 && setIsOpen(true)}
-          placeholder={placeholder}
-          className="flex-1 bg-transparent text-xs text-slate-200 placeholder-slate-600 outline-none"
-        />
-        {isSearching
-          ? <Loader2 className="w-3.5 h-3.5 text-slate-500 animate-spin flex-shrink-0" />
-          : query
-          ? <button onClick={() => { setQuery(''); setResults([]); setIsOpen(false); }} className="text-slate-500 hover:text-slate-300 transition-colors flex-shrink-0">
-              <X className="w-3 h-3" />
-            </button>
-          : <Search className="w-3.5 h-3.5 text-slate-600 flex-shrink-0" />
-        }
-      </div>
-
-      <AnimatePresence>
-        {isOpen && results.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: -4, scale: 0.98 }}
-            animate={{ opacity: 1, y: 0, scale: 1 }}
-            exit={{ opacity: 0, y: -4, scale: 0.98 }}
-            transition={{ duration: 0.15 }}
-            className="absolute top-full left-0 right-0 mt-1 z-50 glass-bright rounded-xl overflow-hidden shadow-2xl"
-            style={{ border: `1px solid ${color}22` }}
-          >
-            {results.map((r, i) => (
-              <div key={i} className="search-result-item" onClick={() => handleSelect(r)}>
-                <div className="flex items-start gap-2">
-                  <MapPin className="w-3 h-3 mt-0.5 flex-shrink-0" style={{ color }} />
-                  <div>
-                    <p className="text-slate-200 text-[11px] font-medium leading-tight">{r.display_name.split(',').slice(0, 2).join(',')}</p>
-                    <p className="text-slate-500 text-[9px] mt-0.5">{r.display_name.split(',').slice(2, 4).join(',')}</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
 
 export default function MapView({
-  start, destination, optimizationResult, onMapClick, clickMode, onLocationSelect,
+  start, destination, optimizationResult, onMapClick, clickMode,
+  selectedRouteType = 'optimal', onSelectRouteType, onInjectHazard,
 }: MapViewProps) {
   const mapRef = useRef<L.Map | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const routeLayersRef = useRef<L.Layer[]>([]);
   const markerLayersRef = useRef<L.Layer[]>([]);
+  const windLayersRef = useRef<L.Layer[]>([]);
   const droneMarkerRef = useRef<L.Marker | null>(null);
   const animFrameRef = useRef<number>(0);
   const [liveBattery, setLiveBattery] = useState(100);
   const [isAnimating, setIsAnimating] = useState(false);
+  const [showWindHeatmap, setShowWindHeatmap] = useState(false);
+  const { theme } = useTheme();
+
+  // Update tile filter when theme changes
+  useEffect(() => {
+    const tiles = document.querySelectorAll<HTMLImageElement>('.leaflet-tile');
+    const filter = theme === 'dark'
+      ? 'brightness(0.38) saturate(0.5) hue-rotate(200deg) invert(0.06)'
+      : 'brightness(1) saturate(1)';
+    tiles.forEach(t => { t.style.filter = filter; });
+    // Also update the CSS variable on root
+    document.documentElement.style.setProperty(
+      '--tile-filter',
+      filter
+    );
+  }, [theme]);
 
   // Init map
   useEffect(() => {
@@ -328,6 +250,47 @@ export default function MapView({
     }
   }, [start, destination]);
 
+  // Wind Vector Heatmap Layer Effect
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    windLayersRef.current.forEach(l => map.removeLayer(l));
+    windLayersRef.current = [];
+
+    if (!showWindHeatmap) return;
+
+    const centerLat = start?.lat ?? 37.7749;
+    const centerLng = start?.lng ?? -122.4194;
+    const windDir = optimizationResult?.weather?.wind_direction_deg ?? 90;
+
+    const latStep = 0.012;
+    const lngStep = 0.018;
+
+    for (let r = -3; r <= 3; r++) {
+      for (let c = -4; c <= 4; c++) {
+        const lat = centerLat + r * latStep;
+        const lng = centerLng + c * lngStep;
+
+        const windIcon = L.divIcon({
+          className: '',
+          html: `<div style="
+            transform: rotate(${windDir}deg);
+            color: rgba(6,182,212,0.7);
+            font-size: 14px; font-weight: bold;
+            text-shadow: 0 0 6px rgba(6,182,212,0.5);
+            pointer-events: none;
+          ">➔</div>`,
+          iconAnchor: [7, 7],
+        });
+
+        const m = L.marker([lat, lng], { icon: windIcon, interactive: false }).addTo(map);
+        windLayersRef.current.push(m);
+      }
+    }
+  }, [showWindHeatmap, start, optimizationResult]);
+
+
   // Optimization result routes + drone animation
   useEffect(() => {
     const map = mapRef.current;
@@ -340,33 +303,50 @@ export default function MapView({
     setIsAnimating(false);
 
     if (!optimizationResult) return;
-    const { ga_route, astar_route, dijkstra_route } = optimizationResult;
+    const { ga_route, balanced_route, direct_route } = optimizationResult;
 
-    // Dijkstra - faint dashed
-    if (dijkstra_route?.waypoints?.length > 1) {
-      const line = L.polyline(dijkstra_route.waypoints.map(w => [w.lat, w.lng] as [number, number]), {
-        color: '#8b5cf6', weight: 1.5, opacity: 0.35, dashArray: '4,10',
+    // 1. Direct Route (High-Risk) — Red dashed line
+    if (direct_route && direct_route.waypoints && direct_route.waypoints.length > 1) {
+      const isSel = selectedRouteType === 'direct';
+      const coords = direct_route.waypoints.map(w => [w.lat, w.lng] as [number, number]);
+      const line = L.polyline(coords, {
+        color: '#f43f5e',
+        weight: isSel ? 4 : 2,
+        opacity: isSel ? 0.95 : 0.45,
+        dashArray: '8,6',
       }).addTo(map);
       routeLayersRef.current.push(line);
     }
 
-    // A* - medium dashed
-    if (astar_route?.waypoints?.length > 1) {
-      const line = L.polyline(astar_route.waypoints.map(w => [w.lat, w.lng] as [number, number]), {
-        color: '#06b6d4', weight: 2, opacity: 0.45, dashArray: '10,8',
+    // 2. Balanced Route (Alternative) — Amber line
+    if (balanced_route && balanced_route.waypoints && balanced_route.waypoints.length > 1) {
+      const isSel = selectedRouteType === 'balanced';
+      const coords = balanced_route.waypoints.map(w => [w.lat, w.lng] as [number, number]);
+      const line = L.polyline(coords, {
+        color: '#f59e0b',
+        weight: isSel ? 4 : 2.5,
+        opacity: isSel ? 0.95 : 0.5,
+        dashArray: isSel ? undefined : '10,6',
       }).addTo(map);
       routeLayersRef.current.push(line);
     }
 
-    // GA Winner — glowing solid line (two layers for glow effect)
+
+    // 3. Optimal GA Route — Emerald glowing solid line
     if (ga_route?.waypoints?.length > 1) {
+      const isSel = selectedRouteType === 'optimal';
       const coords = ga_route.waypoints.map(w => [w.lat, w.lng] as [number, number]);
 
-      // Glow layer
-      const glow = L.polyline(coords, { color: '#10b981', weight: 10, opacity: 0.08, lineCap: 'round' }).addTo(map);
-      routeLayersRef.current.push(glow);
-      // Main line
-      const main = L.polyline(coords, { color: '#10b981', weight: 3, opacity: 1, lineCap: 'round' }).addTo(map);
+      if (isSel) {
+        const glow = L.polyline(coords, { color: '#10b981', weight: 12, opacity: 0.12, lineCap: 'round' }).addTo(map);
+        routeLayersRef.current.push(glow);
+      }
+      const main = L.polyline(coords, {
+        color: '#10b981',
+        weight: isSel ? 4 : 2.5,
+        opacity: isSel ? 1 : 0.5,
+        lineCap: 'round',
+      }).addTo(map);
       routeLayersRef.current.push(main);
 
       // Waypoint dots
@@ -385,20 +365,16 @@ export default function MapView({
           <div style="font-size:9px;font-weight:700;color:#475569;margin-bottom:8px;letter-spacing:0.1em;">ROUTE LEGEND</div>
           <div style="display:flex;flex-direction:column;gap:6px;">
             <div style="display:flex;align-items:center;gap:8px;">
-              <div style="width:20px;height:3px;background:linear-gradient(90deg,#10b981,#06b6d4);border-radius:2px;box-shadow:0 0 6px #10b98166;"></div>
-              <span style="font-size:10px;color:#10b981;font-weight:600;">GA (Winner) ✓</span>
+              <div style="width:20px;height:3px;background:#10b981;border-radius:2px;box-shadow:0 0 6px #10b98166;"></div>
+              <span style="font-size:10px;color:#10b981;font-weight:600;">🟢 Optimal GA Route</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-              <div style="width:20px;height:2px;background:#06b6d4;border-radius:2px;opacity:0.6;border-top:2px dashed #06b6d4;"></div>
-              <span style="font-size:10px;color:#64748b;">A* Search</span>
+              <div style="width:20px;height:2px;background:#f59e0b;border-radius:2px;"></div>
+              <span style="font-size:10px;color:#f59e0b;font-weight:500;">🟡 Balanced Alternative</span>
             </div>
             <div style="display:flex;align-items:center;gap:8px;">
-              <div style="width:20px;height:1.5px;background:#8b5cf6;border-radius:2px;opacity:0.5;border-top:1.5px dotted #8b5cf6;"></div>
-              <span style="font-size:10px;color:#64748b;">Dijkstra</span>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px;margin-top:2px;">
-              <div style="width:20px;height:10px;background:rgba(244,63,94,0.12);border:1px dashed rgba(244,63,94,0.5);border-radius:3px;"></div>
-              <span style="font-size:10px;color:#64748b;">No-Fly Zone</span>
+              <div style="width:20px;height:2px;background:#f43f5e;border-radius:2px;border-top:2px dashed #f43f5e;"></div>
+              <span style="font-size:10px;color:#f43f5e;font-weight:500;">🔴 Direct / High-Risk</span>
             </div>
           </div>
         </div>
@@ -408,12 +384,18 @@ export default function MapView({
     legend.addTo(map);
     routeLayersRef.current.push(legend as any);
 
-    // Animate drone along GA route
-    const route = ga_route.waypoints;
+    // Active route for drone flight animation
+    const activeRouteObj = selectedRouteType === 'balanced'
+      ? (balanced_route || ga_route)
+      : selectedRouteType === 'direct'
+      ? (direct_route || ga_route)
+      : ga_route;
+
+    const route = activeRouteObj.waypoints;
     if (route.length < 2) return;
 
     setIsAnimating(true);
-    const totalBattery = ga_route.battery_consumed_pct;
+    const totalBattery = activeRouteObj.battery_consumed_pct;
     let segIdx = 0;
     let t = 0;
     const SPEED = 0.006;
@@ -440,37 +422,76 @@ export default function MapView({
     animFrameRef.current = requestAnimationFrame(animate);
 
     return () => { cancelAnimationFrame(animFrameRef.current); };
-  }, [optimizationResult]);
+  }, [optimizationResult, selectedRouteType]);
 
-  const handleSearchSelect = (coords: Coordinates, _name: string, type: 'start' | 'destination') => {
-    onLocationSelect?.(coords, type);
-    mapRef.current?.flyTo([coords.lat, coords.lng], 14, { animate: true, duration: 1.2 });
-  };
 
   return (
     <div className="relative flex-1 w-full h-full overflow-hidden">
       {/* Map canvas */}
       <div ref={containerRef} className="absolute inset-0 z-0 hero-gradient" />
 
-      {/* Search bars overlay */}
-      <div className="absolute top-4 left-4 right-4 z-20 flex gap-2 pointer-events-none">
-        <div className="flex-1 pointer-events-auto max-w-xs">
-          <MapSearchBar
-            type="start"
-            placeholder="Search origin location..."
-            icon={<MapPin className="w-4 h-4" />}
-            onSelect={(coords, name) => handleSearchSelect(coords, name, 'start')}
-          />
+      {/* On-Map Route Selection & Hazard Injection Widget */}
+      {optimizationResult && (
+        <div className="absolute top-4 left-4 z-20 flex items-center gap-1.5 p-1.5 rounded-2xl glass-bright shadow-2xl"
+          style={{ border: '1px solid rgba(255,255,255,0.12)', backdropFilter: 'blur(20px)' }}>
+          {[
+            { id: 'optimal' as const, label: '🟢 Optimal', color: '#10b981', desc: `${optimizationResult.ga_route.total_distance_km.toFixed(1)} km` },
+            { id: 'balanced' as const, label: '🟡 Balanced', color: '#f59e0b', desc: `${(optimizationResult.balanced_route?.total_distance_km ?? 0).toFixed(1)} km` },
+            { id: 'direct' as const, label: '🔴 High Risk', color: '#f43f5e', desc: `${(optimizationResult.direct_route?.total_distance_km ?? 0).toFixed(1)} km` },
+          ].map(opt => (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => onSelectRouteType?.(opt.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition-all flex items-center gap-1.5 ${
+                selectedRouteType === opt.id
+                  ? 'text-white shadow-md'
+                  : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+              }`}
+              style={{
+                background: selectedRouteType === opt.id ? `${opt.color}25` : 'transparent',
+                border: `1px solid ${selectedRouteType === opt.id ? `${opt.color}66` : 'transparent'}`,
+              }}
+            >
+              <span>{opt.label}</span>
+              <span className="text-[9px] font-mono text-slate-400 opacity-80">({opt.desc})</span>
+            </button>
+          ))}
+
+          <div className="w-px h-5 bg-white/10 mx-1" />
+
+          {/* Inject Hazard Button */}
+          <button
+            type="button"
+            onClick={() => {
+              audioTelemetry.announceHazardInjected();
+              onInjectHazard?.();
+            }}
+            id="inject-hazard-btn"
+            title="Inject Dynamic Storm/TFR Obstacle & Trigger GA Mid-Flight Re-routing"
+            className="px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1 text-rose-400 bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 active:scale-95"
+          >
+            <span>⚡ Inject Hazard</span>
+          </button>
+
+          {/* Wind Vectors Overlay Button */}
+          <button
+            type="button"
+            onClick={() => setShowWindHeatmap(!showWindHeatmap)}
+            id="wind-heatmap-btn"
+            title="Toggle Live Wind Vector Heatmap Layer"
+            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1 ${
+              showWindHeatmap
+                ? 'text-cyan-300 bg-cyan-500/25 border border-cyan-500/50'
+                : 'text-slate-400 bg-white/5 border border-white/10 hover:text-slate-200'
+            }`}
+          >
+            <span>💨 Wind Vectors</span>
+          </button>
         </div>
-        <div className="flex-1 pointer-events-auto max-w-xs">
-          <MapSearchBar
-            type="destination"
-            placeholder="Search destination..."
-            icon={<Navigation className="w-4 h-4" />}
-            onSelect={(coords, name) => handleSearchSelect(coords, name, 'destination')}
-          />
-        </div>
-      </div>
+      )}
+
+
 
       {/* Live Battery HUD */}
       <AnimatePresence>
@@ -524,11 +545,9 @@ export default function MapView({
             <div className="w-4 h-4 rounded-full border-2 border-current flex items-center justify-center" style={{ color: clickMode === 'start' ? '#10b981' : '#06b6d4' }}>
               <div className="w-1 h-1 rounded-full bg-current" />
             </div>
-            <span className="text-slate-300">Click map to place</span>
-            <span className="font-bold" style={{ color: clickMode === 'start' ? '#10b981' : '#06b6d4' }}>
+            <span style={{ color: clickMode === 'start' ? '#10b981' : '#06b6d4' }} className="font-bold">
               {clickMode === 'start' ? 'Origin' : 'Destination'}
             </span>
-            <span className="text-slate-500">or use search above</span>
           </motion.div>
         )}
       </AnimatePresence>
