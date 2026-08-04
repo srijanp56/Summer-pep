@@ -393,15 +393,15 @@ function AppInner() {
           style={{ borderLeft: '1px solid rgba(255,255,255,0.06)' }}
         >
           {/* Tab bar */}
-          <div className="flex items-center gap-1 p-2 flex-shrink-0" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
+          <div className="flex items-center gap-1 p-2 flex-shrink-0 overflow-x-auto scrollbar-thin" style={{ borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
             {PANEL_TABS.map(tab => (
               <button
                 key={tab.id}
                 onClick={() => setActivePanel(tab.id)}
-                className={`panel-tab flex items-center gap-1.5 ${activePanel === tab.id ? 'active' : ''}`}
+                className={`panel-tab flex items-center gap-1.5 flex-shrink-0 ${activePanel === tab.id ? 'active' : ''}`}
               >
                 <span className="text-[12px]">{tab.icon}</span>
-                <span className="hidden lg:inline">{tab.label}</span>
+                <span>{tab.label}</span>
               </button>
             ))}
           </div>
