@@ -55,6 +55,7 @@ function AppInner() {
   const [destination, setDestination] = useState<Coordinates | null>(null);
 
   const [selectedRouteType, setSelectedRouteType] = useState<'optimal' | 'balanced' | 'direct'>('optimal');
+  const [mobileTab, setMobileTab] = useState<'map' | 'config' | 'telemetry'>('map');
   const [activeHoverWaypointIdx, setActiveHoverWaypointIdx] = useState<number | null>(null);
   const lastFormDataRef = useRef<any>(null);
 
@@ -88,6 +89,7 @@ function AppInner() {
     setLiveGenerations([]);
     setIsStreaming(true);
     setActivePanel('ga');
+    setMobileTab('map');
 
     const reqPayload = { ...formData, start, destination };
 
@@ -207,13 +209,15 @@ function AppInner() {
         onToggleTheme={toggleTheme}
       />
 
-      <div className="flex flex-1 min-h-0">
+      <div className="flex flex-1 min-h-0 relative pb-14 lg:pb-0">
         {/* ── LEFT: Mission Config ── */}
         <motion.aside
           initial={{ x: -320, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           transition={{ duration: 0.45, ease: [0.4, 0, 0.2, 1], delay: 0.1 }}
-          className="w-72 flex-shrink-0 flex flex-col glass border-r overflow-y-auto"
+          className={`w-full lg:w-72 flex-shrink-0 flex-col glass border-r overflow-y-auto ${
+            mobileTab === 'config' ? 'flex' : 'hidden lg:flex'
+          }`}
           style={{ borderRight: '1px solid rgba(255,255,255,0.06)' }}
         >
           <DeliveryForm
@@ -228,7 +232,9 @@ function AppInner() {
         </motion.aside>
 
         {/* ── CENTER: Map ── */}
-        <main className="flex-1 flex flex-col min-w-0 relative">
+        <main className={`flex-1 flex-col min-w-0 relative ${
+          mobileTab === 'map' ? 'flex' : 'hidden lg:flex'
+        }`}>
           <MapView
             start={start}
             destination={destination}
@@ -374,7 +380,9 @@ function AppInner() {
           initial={{ x: 400, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           transition={{ duration: 0.45, ease: [0.4, 0, 0.2, 1], delay: 0.15 }}
-          className="w-[380px] flex-shrink-0 flex flex-col glass"
+          className={`w-full lg:w-[380px] flex-shrink-0 flex-col glass ${
+            mobileTab === 'telemetry' ? 'flex' : 'hidden lg:flex'
+          }`}
           style={{ borderLeft: '1px solid rgba(255,255,255,0.06)' }}
         >
           {/* Tab bar */}
@@ -439,6 +447,48 @@ function AppInner() {
             </AnimatePresence>
           </div>
         </motion.aside>
+      </div>
+
+      {/* ── MOBILE BOTTOM NAVIGATION BAR ── */}
+      <div className="lg:hidden fixed bottom-0 left-0 right-0 z-50 glass-bright px-4 py-2 border-t border-white/10 flex items-center justify-around">
+        <button
+          onClick={() => setMobileTab('map')}
+          className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+            mobileTab === 'map'
+              ? 'text-emerald-400 bg-emerald-500/15 border border-emerald-500/30 shadow-[0_0_12px_rgba(16,185,129,0.25)]'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <span className="text-base">🗺️</span>
+          <span>Map</span>
+        </button>
+
+        <button
+          onClick={() => setMobileTab('config')}
+          className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+            mobileTab === 'config'
+              ? 'text-cyan-400 bg-cyan-500/15 border border-cyan-500/30 shadow-[0_0_12px_rgba(6,182,212,0.25)]'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <span className="text-base">⚙️</span>
+          <span>Mission</span>
+        </button>
+
+        <button
+          onClick={() => setMobileTab('telemetry')}
+          className={`flex flex-col items-center gap-0.5 px-4 py-1.5 rounded-xl text-xs font-semibold transition-all relative ${
+            mobileTab === 'telemetry'
+              ? 'text-violet-400 bg-violet-500/15 border border-violet-500/30 shadow-[0_0_12px_rgba(139,92,246,0.25)]'
+              : 'text-slate-400 hover:text-slate-200'
+          }`}
+        >
+          <span className="text-base">📊</span>
+          <span>Telemetry</span>
+          {optimizationResult && (
+            <span className="absolute top-1 right-3 w-2 h-2 rounded-full bg-emerald-400 animate-ping" />
+          )}
+        </button>
       </div>
 
       <StatusBar isLoading={isLoading} result={optimizationResult} batteryError={batteryError !== null} />
