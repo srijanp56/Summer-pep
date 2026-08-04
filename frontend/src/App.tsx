@@ -387,7 +387,7 @@ function AppInner() {
           initial={{ x: 400, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}
           transition={{ duration: 0.45, ease: [0.4, 0, 0.2, 1], delay: 0.15 }}
-          className={`w-full lg:w-[380px] flex-shrink-0 flex-col glass ${
+          className={`w-full lg:w-[380px] flex-shrink-0 flex-col h-full overflow-hidden glass ${
             mobileTab === 'telemetry' ? 'flex' : 'hidden lg:flex'
           }`}
           style={{ borderLeft: '1px solid rgba(255,255,255,0.06)' }}
