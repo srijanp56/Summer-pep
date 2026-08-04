@@ -24,27 +24,26 @@ export async function fetchWeather(mode: string = 'simulated', lat?: number, lng
 }
 
 export async function optimizeRoute(req: OptimizationRequest): Promise<OptimizationResponse> {
-  const res = await fetch(`${API_BASE}/optimize`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(req),
-  });
-  if (!res.ok) {
-    try {
-      const errBody = await res.json();
-      if (errBody?.detail?.error === 'INSUFFICIENT_BATTERY') {
-        const d = errBody.detail;
-        throw new Error(
-          `INSUFFICIENT_BATTERY|${d.message}|${d.battery_required_pct}|${d.battery_available_pct}|${d.deficit_pct}`
-        );
-      }
-      throw new Error(errBody?.detail?.message || errBody?.detail || 'Route optimization request failed');
-    } catch (e: any) {
-      if (e.message?.startsWith('INSUFFICIENT_BATTERY')) throw e;
-      throw new Error('Route optimization request failed');
+  try {
+    const res = await fetch(`${API_BASE}/optimize`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    if (res.ok) {
+      return await res.json();
     }
+    const errBody = await res.json().catch(() => null);
+    if (errBody?.detail?.error === 'INSUFFICIENT_BATTERY') {
+      const d = errBody.detail;
+      throw new Error(
+        `INSUFFICIENT_BATTERY|${d.message}|${d.battery_required_pct}|${d.battery_available_pct}|${d.deficit_pct}`
+      );
+    }
+  } catch (e: any) {
+    if (e.message?.startsWith('INSUFFICIENT_BATTERY')) throw e;
   }
-  return res.json();
+  return generateClientSideOptimization(req);
 }
 
 export async function queryRAG(query: string): Promise<RAGQueryResponse> {
